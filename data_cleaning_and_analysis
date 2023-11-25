@@ -1,0 +1,563 @@
+---
+title: "C.H.A.T. Lab: ACP project"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+author: 
+- "Analyst: Plamena P. Powla, MS"
+output: rmdformats::readthedown
+---
+
+<style type="text/css">
+
+body{ /* Normal */
+      font-size: 12px;
+  }
+td { /* Table, th is to adjust table header information & td is for table data cells info */
+  font-size: 12px;
+}
+h1.title {
+  font-size: 50px;
+  color: #900C3F; 
+  text-align: center;
+}
+h1 { /* Header 1 */
+  font-size: 25px;
+  color: #4c4c4c;
+  text-align: center;
+}
+h2 { /* Header 2 */
+    font-size: 25px;
+  color: #000000;
+}
+h3 { /* Header 3 */
+  font-size: 20px;
+  color: #4c4c4c;
+}
+code.r{ /* Code block */
+    font-size: 12px;
+}
+pre { /* Code block - determines code spacing between lines */
+    font-size: 14px;
+}
+
+.list-group-item.active, .list-group-item.active:focus, .list-group-item.active:hover{ /*table of contents*/
+    background-color: #556B2F;   /*background color of table of contents header 2 when selected*/
+}
+
+a { /*tab's when not in use*/
+    color: #4f456b ;  /*color of text when not selected, purple alt color #4E2A84*/
+    text-decoration: none;
+}
+
+.nav-tabs>li.active>a, .nav-tabs>li.active>a:focus, .nav-tabs>li.active>a:hover { /*tabs in use*/
+    color: white; /*color of text when selected, white*/
+    cursor: default;
+    background-color: #4f456b ; /% background color when tab is in use is purple*/
+    border: 1px solid #ddd;
+    border-bottom-color: transparent;
+}
+
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, fig.align = "left") 
+# this removes the code used from the html output in all following chunks
+```
+
+```{r loading packages, message=FALSE, warning=FALSE}
+library(DT)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(ggplot2) # these packages are used to create graphs
+library(ggpubr) # 
+library(plotly) #
+library(gtsummary) #
+library(gt)
+library(openxlsx)
+library(data.table)
+library(flextable)
+library(stringr)
+library(haven) # read_dta
+library(ggplot2)
+library(rlist)
+library(survival)
+library(ggfortify)
+```
+
+```{r loading data, message=FALSE, warning=FALSE, include = FALSE}
+## adv_code data
+df_adv_code <- read.xlsx("/Users/plamena/Desktop/C.H.A.T. lab/R/adv_code.xlsx")
+load(file="missing_time_pts.RData")
+missing_time_pts <- print(missing_time_pts)
+
+df_adv_code = data.table(df_adv_code %>%
+ group_by(patient_id) %>%
+ mutate(count = row_number())) %>% subset(!patient_id %in% missing_time_pts)
+
+df_adv_code$code_status <- ifelse(df_adv_code$code_status == "Full code", "Full code",
+                           ifelse(df_adv_code$code_status == "DNAR/DNI" | 
+                                  df_adv_code$code_status == "DNAR/DNI*", "DNAR/DNI",
+                           ifelse(df_adv_code$code_status == "DNAR" | 
+                                  df_adv_code$code_status == "DNAR*", "DNAR",
+                           ifelse(df_adv_code$code_status == "Treatment limitations", "Treatment limitations",
+                                  df_adv_code$code_status))))
+
+df_adv_code <- df_adv_code %>% group_by(patient_id) %>%
+                      dplyr::mutate(last_code = dplyr::last(code_status),
+                                    last_code_context = dplyr::last(code_context),
+                                    last_enc_date_did = dplyr::last(enc_date_did),
+                                    total_orders = dplyr::last(count),
+                                    first_code_enc = dplyr::first(encounter_id))
+
+df_adv_code_wide1 <- dcast(df_adv_code, patient_id + last_code + total_orders ~ count, value.var="code_status")
+df_adv_code_wide2 <- dcast(df_adv_code, patient_id + last_code_context ~ count, value.var="code_context")
+df_adv_code_wide3 <- dcast(df_adv_code, patient_id + first_code_enc + last_enc_date_did ~ count, value.var="enc_date_did")
+
+names(df_adv_code_wide1)[4:ncol(df_adv_code_wide1)]<- paste0(rep("Status_", each=1),1:16)
+names(df_adv_code_wide2)[3:ncol(df_adv_code_wide2)]<- paste0(rep("Code_context_", each=1),1:16)
+names(df_adv_code_wide3)[4:ncol(df_adv_code_wide3)]<- paste0(rep("Enc_date_did_", each=1),1:16)
+
+df_adv_code_wide <- full_join(full_join(df_adv_code_wide1, df_adv_code_wide2), df_adv_code_wide3)
+
+df_adv_code_wide$Status_2 <- ifelse(is.na(df_adv_code_wide$Status_2), 
+                                    "Did not have any code status changes", 
+                                    df_adv_code_wide$Status_2)
+
+df_adv_code_wide$Code_context_2 <- ifelse(is.na(df_adv_code_wide$Code_context_2), 
+                                    "Did not have any code status changes", 
+                                    df_adv_code_wide$Code_context_2)
+```
+
+```{r, message=FALSE, warning=FALSE}
+df_demog <- read.xlsx("/Users/plamena/Desktop/C.H.A.T. lab/R/demog.xlsx")
+
+df_demog$power_of_attrny_yn <- ifelse(df_demog$power_of_attrny_yn == "Y", "Yes", 
+                               ifelse(df_demog$power_of_attrny_yn == "N", "No", NA))
+
+df_demog$adv_directive_yn <- ifelse(df_demog$adv_directive_yn == "Y", "Yes", 
+                             ifelse(df_demog$adv_directive_yn == "N", "No", NA))
+
+df_demog$death_flag <- ifelse(df_demog$death_flag == "y", "Yes", "No")
+df_demog$death_flag[is.na(df_demog$death_flag)] <- "No"
+
+df_demog$Black <- ifelse(df_demog$race == "Black/African-American", "Black/African-American",
+                  ifelse(is.na(df_demog$race), "Not Black/African-American or unknown",
+                                               "Not Black/African-American or unknown"))
+
+df_demog$Race <- ifelse(df_demog$race == "Black/African-American", "Black/African-American",
+                  ifelse(is.na(df_demog$race), "Other or Unknown",
+                   ifelse(df_demog$race == "Asian/Mideast Indian", "Asian/Mideast Indian",
+                    ifelse(df_demog$race == "White", "White", "Other or Unknown"))))
+
+df_demog$Race <- relevel(factor(df_demog$Race), "White")
+
+demog_adv_code <- right_join(df_demog, df_adv_code_wide, by = join_by(patient_id))
+
+demog_adv_code$code_status_orders <- ifelse(demog_adv_code$total_orders==1, "One",
+                                     ifelse(demog_adv_code$total_orders==2, "Two",
+                                     ifelse(demog_adv_code$total_orders==3, "Three",
+                                     ifelse(demog_adv_code$total_orders>=4, "Four or more", NA))))
+```
+
+```{r, message=FALSE, warning=FALSE}
+df_icd_top3 <- read.xlsx("/Users/plamena/Desktop/C.H.A.T. lab/R/icd_top3.xlsx") 
+
+breast_cancer_dx <- df_icd_top3[str_detect(df_icd_top3$icd_dx_code, "C50"),]
+
+breast_cancer_dx2 = data.table(breast_cancer_dx %>%
+                         group_by(patient_id) %>% 
+                         mutate(first_dx_enc = dplyr::first(enc_date_did)) %>% 
+                         group_by(patient_id, first_dx_enc) %>% 
+                         mutate(count3 = row_number())) %>% filter(count3 == 1)
+
+demog_adv_code_icd2 <- left_join(demog_adv_code, breast_cancer_dx2, by=c("patient_id"="patient_id"))
+
+demog_adv_code_icd2$time_to_first_code <- 
+ifelse(as.Date(demog_adv_code_icd2$Enc_date_did_1)-as.Date(demog_adv_code_icd2$first_dx_enc) >= 0,
+       as.Date(demog_adv_code_icd2$Enc_date_did_1)-as.Date(demog_adv_code_icd2$first_dx_enc),
+ifelse(as.Date(demog_adv_code_icd2$Enc_date_did_2)-as.Date(demog_adv_code_icd2$first_dx_enc) >= 0,
+       as.Date(demog_adv_code_icd2$Enc_date_did_2)-as.Date(demog_adv_code_icd2$first_dx_enc),
+ifelse(as.Date(demog_adv_code_icd2$Enc_date_did_3)-as.Date(demog_adv_code_icd2$first_dx_enc) >= 0,
+       as.Date(demog_adv_code_icd2$Enc_date_did_3)-as.Date(demog_adv_code_icd2$first_dx_enc),
+ifelse(as.Date(demog_adv_code_icd2$Enc_date_did_4)-as.Date(demog_adv_code_icd2$first_dx_enc) >= 0,
+       as.Date(demog_adv_code_icd2$Enc_date_did_4)-as.Date(demog_adv_code_icd2$first_dx_enc),
+ifelse(as.Date(demog_adv_code_icd2$Enc_date_did_5)-as.Date(demog_adv_code_icd2$first_dx_enc) >= 0,
+       as.Date(demog_adv_code_icd2$Enc_date_did_5)-as.Date(demog_adv_code_icd2$first_dx_enc),
+ifelse(as.Date(demog_adv_code_icd2$Enc_date_did_6)-as.Date(demog_adv_code_icd2$first_dx_enc) >= 0,
+       as.Date(demog_adv_code_icd2$Enc_date_did_6)-as.Date(demog_adv_code_icd2$first_dx_enc),
+ifelse(as.Date(demog_adv_code_icd2$Enc_date_did_7)-as.Date(demog_adv_code_icd2$first_dx_enc) >= 0,
+       as.Date(demog_adv_code_icd2$Enc_date_did_7)-as.Date(demog_adv_code_icd2$first_dx_enc),
+ifelse(as.Date(demog_adv_code_icd2$Enc_date_did_8)-as.Date(demog_adv_code_icd2$first_dx_enc) >= 0,
+       as.Date(demog_adv_code_icd2$Enc_date_did_8)-as.Date(demog_adv_code_icd2$first_dx_enc),
+ifelse(as.Date(demog_adv_code_icd2$Enc_date_did_9)-as.Date(demog_adv_code_icd2$first_dx_enc) >= 0,
+       as.Date(demog_adv_code_icd2$Enc_date_did_9)-as.Date(demog_adv_code_icd2$first_dx_enc),
+ifelse(as.Date(demog_adv_code_icd2$Enc_date_did_10)-as.Date(demog_adv_code_icd2$first_dx_enc) >= 0,
+       as.Date(demog_adv_code_icd2$Enc_date_did_10)-as.Date(demog_adv_code_icd2$first_dx_enc),
+ifelse(as.Date(demog_adv_code_icd2$Enc_date_did_11)-as.Date(demog_adv_code_icd2$first_dx_enc) >= 0,
+       as.Date(demog_adv_code_icd2$Enc_date_did_11)-as.Date(demog_adv_code_icd2$first_dx_enc),
+ifelse(as.Date(demog_adv_code_icd2$Enc_date_did_12)-as.Date(demog_adv_code_icd2$first_dx_enc) >= 0,
+       as.Date(demog_adv_code_icd2$Enc_date_did_12)-as.Date(demog_adv_code_icd2$first_dx_enc),
+ifelse(as.Date(demog_adv_code_icd2$Enc_date_did_13)-as.Date(demog_adv_code_icd2$first_dx_enc) >= 0,
+       as.Date(demog_adv_code_icd2$Enc_date_did_13)-as.Date(demog_adv_code_icd2$first_dx_enc),
+ifelse(as.Date(demog_adv_code_icd2$Enc_date_did_14)-as.Date(demog_adv_code_icd2$first_dx_enc) >= 0,
+       as.Date(demog_adv_code_icd2$Enc_date_did_14)-as.Date(demog_adv_code_icd2$first_dx_enc),
+ifelse(as.Date(demog_adv_code_icd2$Enc_date_did_15)-as.Date(demog_adv_code_icd2$first_dx_enc) >= 0,
+       as.Date(demog_adv_code_icd2$Enc_date_did_15)-as.Date(demog_adv_code_icd2$first_dx_enc),
+ifelse(as.Date(demog_adv_code_icd2$Enc_date_did_16)-as.Date(demog_adv_code_icd2$first_dx_enc) >= 0,
+       as.Date(demog_adv_code_icd2$Enc_date_did_16)-as.Date(demog_adv_code_icd2$first_dx_enc), "negative"))))))))))))))))
+
+missing_time <- demog_adv_code_icd2 %>% filter(is.na(demog_adv_code_icd2$time_to_first_code))
+
+missing_time_pts <- missing_time$patient_id
+
+# save(missing_time_pts, file="missing_time_pts.RData")
+
+## this dataset does not include pts with missing time info:
+### either no date associated with breast cancer dx or code status documentation only before diagnosis but not after
+demog_adv_code_icd3 <- demog_adv_code_icd2 %>% subset(!patient_id %in% missing_time_pts) 
+
+demog_adv_code_icd3$code_data <- rep("Yes", length(demog_adv_code_icd3$time_to_first_code)) # indicator that this data is for patients with code status documentation
+
+code_ids <- demog_adv_code_icd3$patient_id
+
+# demog_adv_code_icd3$Status_2 <- ifelse(demog_adv_code_icd3$Status_2=="Did not have any code status changes", NA, demog_adv_code_icd3$Status_2)
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+# all patients
+df_enc <- read.xlsx("/Users/plamena/Desktop/C.H.A.T. lab/R/encounters.xlsx") 
+
+# subset to patients not included in the 545 with code status orders after dx.
+df_enc2 <- df_enc %>% subset(!patient_id %in% code_ids) 
+
+# joining with ICD breast cancer data
+df_enc3 <- left_join(df_enc2, breast_cancer_dx2, by = join_by(patient_id))
+  
+df_enc4 <- df_enc3 %>% group_by(patient_id) %>%
+                       filter(as.Date(enc_date_did.x)-as.Date(first_dx_enc)>=0) %>% # filter to encounters after breast cancer dx. (16k less encounters)
+                       dplyr::mutate(last_enc = dplyr::last(enc_date_did.x)) # creates a variable for date of last encounter 
+
+df_enc5 <- df_enc4 %>% group_by(patient_id) %>%
+                         mutate(count6 = row_number()) %>% filter(count6==1) 
+# filter so that only 1 observation per patient, 6989 unique patients without code status orders after breast cancer dx.
+
+df_enc5$time_from_first_to_last_enc <- as.Date(df_enc5$last_enc)-as.Date(df_enc5$first_dx_enc)
+                         
+df_enc_demog <- left_join(df_enc5, df_demog, by = join_by(patient_id)) 
+
+df_enc_demog$code_data <- rep("No", length(df_enc_demog$time_from_first_to_last_enc)) # indicator that this data is for patients without code status documentation
+```
+
+```{r, message=FALSE, warning=FALSE}
+# bmi data set
+df_bmi <- read.xlsx("/Users/plamena/Desktop/C.H.A.T. lab/R/bmi.xlsx") 
+
+df_bmi2 <-  df_bmi %>% group_by(patient_id) %>%
+            dplyr::mutate(first_height = dplyr::first(na.omit(height)),
+                          first_weight = dplyr::first(na.omit(weight_scale)),
+                          count7 = row_number()) %>% filter(count7==1) # creates a variable for date of last encounter 
+
+df2 <- full_join(demog_adv_code_icd3, df_enc_demog)
+
+df2$age_at_dx <- as.numeric(as.Date(df2$first_dx_enc)-as.Date(df2$dob_did))/365.2425
+
+df2_over18 <- df2 %>% filter(age_at_dx>=18)
+
+df3 <- left_join(df2, df_bmi2, by=join_by(patient_id))
+
+df_full <- df3 %>% filter(age_at_dx >= 18)
+
+final_pts <- df_full$patient_id
+
+dx_date <- df_full$enc_date_did.x
+```
+
+```{r, message=FALSE, warning=FALSE}
+demog_adv_code_icd <- left_join(df_full, df_icd_top3, by=c("patient_id"="patient_id")) %>% 
+                      subset(!patient_id %in% missing_time_pts)
+
+demog_adv_code_icd = data.table(demog_adv_code_icd %>%
+                         group_by(patient_id, icd_diagnosis.x) %>%
+                         mutate(count2 = row_number())) %>% filter(count2 == 1)
+# sometimes a patient had the same dx listed multiple times (from same or different encounters), 
+# this filters to the first occurance of a unique dx.
+
+#df_icd_top3_wide <- reshape2::dcast(df_icd_top3, patient_id ~ icd_diagnosis, value.var="dx_rank")
+#demog_adv_code_bmi_icd <- left_join(demog_adv_code_bmi, df_icd_top3_wide, by=c("patient_id"="patient_id"))
+
+icd_25mostcommon <- data.frame(sort(table(demog_adv_code_icd$icd_diagnosis.x), decreasing=T)) %>% slice(1:25) # 8045 unique dx
+## filters to 25 most common dx in descending order.
+
+icd_25mostcommon$Var1 <- str_to_title(icd_25mostcommon$Var1)
+```
+
+```{r}
+df_enc_dx <- left_join(df_enc, breast_cancer_dx2, by = join_by(patient_id))
+  
+df_enc_dx2 <- df_enc_dx %>% group_by(patient_id) %>%
+                       filter(as.Date(enc_date_did.x)-as.Date(first_dx_enc)>=0) %>% # filter to encounters after breast cancer dx. (16k less encounters)
+                       dplyr::mutate(last_enc = dplyr::last(enc_date_did.x))
+
+## inpatient encounters, df_enc_dx2 is encounters after breast cancer dx.
+inpatient1 <- df_enc_dx2 %>% subset(patient_id %in% final_pts) %>% filter(enc_eio == "Inpatient")
+
+inpatient2 <- inpatient1 %>% group_by(patient_id) %>%
+              mutate(count11 = length(unique(encounter_id.x)))
+
+inpatient3 <- inpatient2 %>% group_by(patient_id) %>%
+              mutate(count12 = row_number()) %>% filter(count12 == 1) %>% mutate(time_until_inpatient = enc_date_did.x-first_dx_enc) %>%
+              subset(select=c(patient_id, count11, time_until_inpatient))
+
+inpatient4 <- left_join(df_full, inpatient3, by = join_by(patient_id)) 
+
+inpatient4$inpatient_stays <- ifelse(is.na(inpatient4$count11), 0, inpatient4$count11)
+
+inpatient4$inpatient_stays_cat <- ifelse(is.na(inpatient4$count11), "No", "Yes")
+
+df_full <- inpatient4
+
+## inpatient encounters, df_enc_dx2 is encounters after breast cancer dx.
+ED1 <- df_enc_dx2 %>% subset(patient_id %in% final_pts) %>% filter(enc_eio == "Emergency")
+
+ED2 <- ED1 %>% group_by(patient_id) %>%
+              mutate(count13 = length(unique(encounter_id.x)))
+
+ED3 <- ED2 %>% group_by(patient_id) %>%
+              mutate(count14 = row_number()) %>% filter(count14 == 1) %>% 
+              subset(select=c(patient_id, count13))
+
+ED4 <- left_join(df_full, ED3, by = join_by(patient_id)) 
+
+ED4$ED_stays <- ifelse(is.na(ED4$count13), 0, ED4$count13)
+
+ED4$ED_stays_cat <- ifelse(is.na(ED4$count13), "No", "Yes")
+
+df_full <- ED4
+```
+
+```{r}
+code_pts <- df_full %>% subset(patient_id %in% code_ids)
+dead_code_pts <- code_pts %>% filter(death_flag == "Yes")
+
+medicare <- df_enc %>% group_by(patient_id) %>%
+                        filter(fin_class == "Medicare") %>%
+                        dplyr::mutate(count14 = row_number(), medicare = fin_class, medicare_date = enc_date_did) %>% 
+                        filter(count14 == 1) %>%
+                        subset(select=c(patient_id, medicare, medicare_date))
+
+other_ins <- df_enc %>% group_by(patient_id) %>%
+                        dplyr::mutate(count15 = row_number(), other_ins = fin_class) %>% filter(count15 == 1) %>%
+                        subset(select=c(patient_id, other_ins))
+
+df_insurance <- left_join(other_ins, medicare, by = join_by(patient_id))
+
+df_full <- left_join(df_full, df_insurance, by = join_by(patient_id))
+
+df_full$Medicare1 <- ifelse(df_full$medicare == "Medicare", 1, NA)
+df_full$other_ins2 <- ifelse(!is.na(df_full$other_ins), 1, NA)
+
+df_full$Medicare <- ifelse(df_full$Medicare1 == 1 & !is.na(df_full$Medicare1), 1, ifelse(is.na(df_full$Medicare1), 0, 0))
+
+df_full$time_to_Medicare <- df_full$medicare_date-df_full$first_dx_enc
+
+df_full$time_to_Medicare2 <- ifelse(df_full$time_to_Medicare < 0, 0, df_full$time_to_Medicare)
+```
+
+```{r, message=FALSE, warning=FALSE}
+df_full$cox_time <- ifelse(df_full$code_data == "Yes", df_full$time_to_first_code,
+                    ifelse(df_full$code_data == "No", df_full$time_from_first_to_last_enc, NA))
+
+df_full$cox_time2 <- ifelse(df_full$cox_time == 0, 1, df_full$cox_time)
+
+df_full$cox_status <- ifelse(df_full$code_data == "Yes", 1,
+                      ifelse(df_full$code_data == "No", 0, NA))
+
+df_full$black <- ifelse(df_full$Black == "Black/African-American", 1, 0)
+
+## calculate BMI, weight in ounces, height in inches.
+
+df_full$weight_lb <-  df_full$first_weight*0.0625
+
+df_full$bmi <- df_full$weight_lb/(df_full$first_height^2)*703
+
+df_full$bmi2 <- ifelse(df_full$bmi >= 100, NA, 
+                ifelse(df_full$bmi <= 5, NA, df_full$bmi))
+
+df_full$bmi_cat <- ifelse(df_full$bmi2 < 18.5, "Underweight",
+                   ifelse(df_full$bmi2 >= 18.5 & df_full$bmi2 < 25, "Healthy weight",
+                   ifelse(df_full$bmi2 >= 25.0 & df_full$bmi2 < 30, "Overweight",
+                   ifelse(df_full$bmi2 >= 30.0, "Obesity", NA))))
+# https://www.cdc.gov/healthyweight/assessing/bmi/adult_bmi/index.html
+
+df_full$bmi_underweight <- ifelse(df_full$bmi2 < 18.5, "Underweight", "Not overweight")
+
+df_full$Married <- ifelse(df_full$marital_status == "Married", 1, 0)
+df_full$Single <- ifelse(df_full$marital_status == "Single", 1, 0)
+
+df_full$Age_groups <- ifelse(df_full$age_at_dx >= 18 & df_full$age_at_dx < 65, "Adult",
+                      ifelse(df_full$age_at_dx >=65, "Older adult", NA))
+
+
+df_full$Age_groups_bin <- ifelse(df_full$age_at_dx >= 18 & df_full$age_at_dx < 65, 0,
+                          ifelse(df_full$age_at_dx >=65, 1, NA))
+
+df_full$Marital_status <- ifelse(df_full$marital_status == "Unknown" |
+                                 df_full$marital_status == "Lifetime partner" |
+                                 df_full$marital_status == "Civil union" |
+                                 df_full$marital_status == "Legally separated", 
+                                 "Other or unknown", df_full$marital_status)
+df_full$Marital_status <- relevel(factor(df_full$Marital_status), "Single")
+```
+
+```{r}
+# Metastatic cancer
+# icd_dat <- read_dta("/Users/plamena/Desktop/C.H.A.T. lab/R/icd.dta")
+
+icd_dat2 <- df_icd_top3 %>% subset(patient_id %in% code_ids) %>% 
+                        filter(icd_dx_code == "C7981") %>%
+                        group_by(patient_id) %>%
+                        mutate(first_secondarydx_enc = dplyr::first(enc_date_did)) %>%
+                        dplyr::mutate(secondary_breast = row_number()) %>% 
+                        filter(secondary_breast == 1) %>%
+                        mutate(secondary_breast_cancer_date = first_secondarydx_enc) %>%
+                        subset(select=c(patient_id, secondary_breast, secondary_breast_cancer_date))
+
+df_full <- left_join(df_full, icd_dat2, by = join_by(patient_id))
+
+df_full$secondary_breast <- ifelse(is.na(df_full$secondary_breast), 0, df_full$secondary_breast)
+
+df_full$time_to_secondary <- as.numeric(as.Date(df_full$secondary_breast_cancer_date)-as.Date(df_full$first_dx_enc))
+```
+
+```{r}
+code_pts <- df_full %>% subset(patient_id %in% code_ids) 
+
+code_pts$DNAR_1 <- ifelse(code_pts$Status_1 == "DNAR/DNI" |
+                           code_pts$Status_1 == "DNAR", 1, 0)
+code_pts$DNAR_2 <- ifelse(code_pts$Status_2 == "DNAR/DNI" |
+                           code_pts$Status_2 == "DNAR", 1, 0)
+code_pts$DNAR_3 <- ifelse(code_pts$Status_3 == "DNAR/DNI" |
+                           code_pts$Status_3 == "DNAR", 1, 0)
+code_pts$DNAR_4 <- ifelse(code_pts$Status_4 == "DNAR/DNI" |
+                           code_pts$Status_4 == "DNAR", 1, 0)
+code_pts$DNAR_5 <- ifelse(code_pts$Status_5 == "DNAR/DNI" |
+                           code_pts$Status_5 == "DNAR", 1, 0)
+code_pts$DNAR_6 <- ifelse(code_pts$Status_6 == "DNAR/DNI" |
+                           code_pts$Status_6 == "DNAR", 1, 0)
+code_pts$DNAR_7 <- ifelse(code_pts$Status_7 == "DNAR/DNI" |
+                           code_pts$Status_7 == "DNAR", 1, 0)
+code_pts$DNAR_8 <- ifelse(code_pts$Status_8 == "DNAR/DNI" |
+                           code_pts$Status_8 == "DNAR", 1, 0)
+code_pts$DNAR_9 <- ifelse(code_pts$Status_9 == "DNAR/DNI" |
+                           code_pts$Status_9 == "DNAR", 1, 0)
+code_pts$DNAR_10 <- ifelse(code_pts$Status_10 == "DNAR/DNI" |
+                           code_pts$Status_10 == "DNAR", 1, 0)
+code_pts$DNAR_11 <- ifelse(code_pts$Status_11 == "DNAR/DNI" |
+                           code_pts$Status_11 == "DNAR", 1, 0)
+code_pts$DNAR_12 <- ifelse(code_pts$Status_12 == "DNAR/DNI" |
+                           code_pts$Status_12 == "DNAR", 1, 0)
+code_pts$DNAR_13 <- ifelse(code_pts$Status_13 == "DNAR/DNI" |
+                           code_pts$Status_13 == "DNAR", 1, 0)
+code_pts$DNAR_14 <- ifelse(code_pts$Status_14 == "DNAR/DNI" |
+                           code_pts$Status_14 == "DNAR", 1, 0)
+code_pts$DNAR_15 <- ifelse(code_pts$Status_15 == "DNAR/DNI" |
+                           code_pts$Status_15 == "DNAR", 1, 0)
+code_pts$DNAR_16 <- ifelse(code_pts$Status_16 == "DNAR/DNI" |
+                           code_pts$Status_16 == "DNAR", 1, 0)
+
+code_pts$number_DNAR <- rowSums(code_pts[,c("DNAR_1", "DNAR_2", "DNAR_3",
+                                              "DNAR_4", "DNAR_5", "DNAR_6",
+                                              "DNAR_7", "DNAR_8", "DNAR_9",
+                                              "DNAR_10", "DNAR_11", "DNAR_12",
+                                              "DNAR_13", "DNAR_14", "DNAR_15",
+                                              "DNAR_16")], na.rm = T)
+code_pts$any_DNAR <- ifelse(code_pts$number_DNAR > 0, 1, 0)
+```
+
+
+```{r}
+#sum(!is.na(unique(breast_cancer_dx$patient_id)))
+#sum(!is.na(unique(breast_cancer_dx2$patient_id)))
+
+#laa <- df_icd_top3 %>% filter(!patient_id %in% idsss)  %>% filter(icd_dx_code == "Z853")
+#length(unique(laa$patient_id))
+
+#idsss <- breast_cancer_dx$patient_id; length(unique(idsss))
+
+#sum(!is.na(unique(breast_cancer_dx$patient_id)))
+```
+
+```{r}
+## competing risks
+#library(cmprsk)
+#library(tidycmprsk)
+#df_full$Competing_risk_event <- as.factor(ifelse(df_full$patient_id %in% code_ids, 1, ifelse(df_full$death_flag == "Yes" & !df_full$patient_id %in% code_ids, 2, 0)))
+```
+
+```{r}
+## insurance during the first code status encounter
+df_ins1 <- df_full %>% filter(!is.na(total_orders))
+code_pts2 <- df_ins1$patient_id
+
+df_enc_ins1 <- df_enc %>% filter(patient_id %in% code_pts2)
+
+df_enc_ins1$Ins <- df_enc_ins1$fin_class
+
+df_ins2 <- left_join(df_ins1, df_enc_ins1, by = join_by(patient_id))
+
+df_ins3 <- df_ins2 %>% filter(Enc_date_did_1 == enc_date_did) 
+
+df_ins4 <- df_ins3 %>% filter(!is.na(fin_class.y)) %>% group_by(patient_id) %>%
+                       dplyr::mutate(count19 = row_number()) %>% filter(count19 == 1)
+
+df_ins4$ins_first_code <- df_ins4$fin_class.y
+
+# sum(sort(table(unique(df_ins4$patient_id)), decreasing = TRUE))
+
+code_pts2 <- left_join(code_pts, df_ins4, by = join_by(patient_id)) 
+
+code_pts2$cs <- rep("Code", length(code_pts2$patient_id))
+
+code_pts3 <- code_pts2 %>% subset(select=c(patient_id, Ins, cs))
+```
+
+```{r}
+## insurance during the last encounter for patient without code status documentation
+nodf_ins1 <- df_full %>% filter(is.na(total_orders))
+nocode_pts2 <- nodf_ins1$patient_id
+
+nodf_enc_ins1 <- df_enc %>% filter(patient_id %in% nocode_pts2)
+
+nodf_enc_ins1$Ins <- nodf_enc_ins1$fin_class
+
+nodf_ins2 <- left_join(nodf_ins1, nodf_enc_ins1, by = join_by(patient_id)) %>% filter(!is.na(fin_class.y))
+
+nodf_ins3 <- nodf_ins2 %>% group_by(patient_id) %>% mutate(last_ucmc_enc = dplyr::last(enc_date_did)) %>% 
+                           group_by(patient_id, last_ucmc_enc) %>% filter(enc_date_did == last_ucmc_enc) 
+
+nodf_ins4 <- nodf_ins3 %>% group_by(patient_id) %>%
+                       dplyr::mutate(count20 = row_number()) %>% filter(count20 == 1)
+
+nodf_ins4$last_enc_ins <- nodf_ins4$fin_class.y
+
+# sum(sort(table(unique(nodf_ins4$patient_id)), decreasing = TRUE))
+
+nodf_ins5 <- nodf_ins4 %>% subset(select=c(patient_id, Ins))
+
+nodf_ins5$cs <- rep("No code", length(nodf_ins4$patient_id))
+```
+
+```{r}
+Insurance <- full_join(code_pts3, nodf_ins5, by = join_by(patient_id, Ins, cs)) %>% filter(!is.na(Ins))
+```
+
+```{r}
+cox_data <- df_full %>% filter(!is.na(inpatient_stays_cat) & 
+                               !is.na(age_at_dx) &
+                               !is.na(black))
+
+#crr(Surv(cox_time, Competing_risk_event) ~ Race + strata(Age_groups_bin) + Marital_status + bmi2 + Marital_status, data = cox_data)
+
+#table(df_full$race, df_full$ethnicity)
+```
